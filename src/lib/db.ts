@@ -14,8 +14,22 @@ const globalForPrisma = globalThis as unknown as {
 function getSchemaHash(): string {
   try {
     const schemaPath = path.join(process.cwd(), "prisma", "schema.prisma");
+    const classPath = path.join(
+      process.cwd(),
+      "src",
+      "generated",
+      "prisma",
+      "internal",
+      "class.ts",
+    );
     const schema = readFileSync(schemaPath, "utf8");
-    return createHash("md5").update(schema).digest("hex");
+    let classSrc = "";
+    try {
+      classSrc = readFileSync(classPath, "utf8");
+    } catch {
+      // generated client not present yet
+    }
+    return createHash("md5").update(schema).update(classSrc).digest("hex");
   } catch {
     return "unknown";
   }

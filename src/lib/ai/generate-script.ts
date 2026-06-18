@@ -2,9 +2,15 @@ import type { GeneratedScript, GeneratedScene } from "@/lib/types";
 import {
   buildScriptPromptRules,
   clampSceneDuration,
+  getEffectiveDurationMin,
   getVideoLengthConfig,
-  normalizeTargetDurationMin,
 } from "@/lib/video-length";
+import {
+  buildPlaceScriptRules,
+  extractPlaceName,
+  isPlaceTopic,
+  MIN_CITY_PLACES,
+} from "@/lib/topic-intent";
 
 /** OpenAI sometimes returns keywords as an array — DB expects a single string. */
 export function normalizeKeywords(keywords: unknown): string {
@@ -35,6 +41,25 @@ function normalizeScene(
     durationSec: clampSceneDuration(rawDuration, targetDurationMin),
     isHook: Boolean(raw.isHook) || index === 0,
   };
+}
+
+function assignAssetOrders(
+  scenes: GeneratedScene[],
+  assetCount: number,
+): GeneratedScene[] {
+  if (assetCount <= 0) return scenes;
+  let idx = 0;
+  return scenes.map((scene) => {
+    if (scene.isHook) return { ...scene, assetOrder: null };
+    const assetOrder = idx % assetCount;
+    idx += 1;
+    return { ...scene, assetOrder };
+  });
+}
+
+function countPlaceBodyScenes(scenes: GeneratedScene[]): number {
+  if (scenes.length <= 2) return 0;
+  return scenes.slice(1, -1).length;
 }
 
 function normalizeScript(
@@ -70,10 +95,90 @@ function normalizeScript(
   return { title, script, hook, scenes };
 }
 
+function buildDemoPlaceScenes(
+  placeName: string,
+  targetDurationMin: number,
+): GeneratedScene[] {
+  const config = getVideoLengthConfig(targetDurationMin);
+  const hook = `${MIN_CITY_PLACES} places in ${placeName} you cannot skip…`;
+
+  const placeTemplates = [
+    { name: "Historic downtown district", kw: "historic downtown architecture" },
+    { name: "Main city museum", kw: "museum art gallery" },
+    { name: "Central park or plaza", kw: "city park green space" },
+    { name: "Iconic skyline viewpoint", kw: "skyline aerial sunset" },
+    { name: "Local food market", kw: "food market street vendors" },
+    { name: "Famous bridge or waterfront", kw: "river waterfront bridge" },
+    { name: "Historic cathedral or temple", kw: "cathedral historic architecture" },
+    { name: "Arts and culture district", kw: "street art murals culture" },
+    { name: "Botanical garden", kw: "botanical garden flowers" },
+    { name: "Nightlife entertainment strip", kw: "nightlife neon city" },
+    { name: "Scenic hiking trail", kw: "hiking trail nature" },
+    { name: "Family-friendly science center", kw: "science museum family" },
+    { name: "Hidden neighborhood cafe strip", kw: "cafe street local" },
+    { name: "Sports stadium or arena", kw: "stadium sports city" },
+    { name: "University campus landmark", kw: "university campus architecture" },
+    { name: "Beach or lakeside promenade", kw: "lake beach promenade" },
+    { name: "Historic fort or monument", kw: "monument landmark statue" },
+    { name: "Local brewery or winery", kw: "brewery tasting room" },
+    { name: "Shopping district", kw: "shopping street boutiques" },
+    { name: "Scenic drive or lookout", kw: "mountain lookout scenic" },
+  ];
+
+  const scenes: GeneratedScene[] = [
+    {
+      order: 0,
+      text: hook,
+      keywords: `${placeName} cinematic aerial skyline`,
+      durationSec: clampSceneDuration(4, targetDurationMin),
+      isHook: true,
+    },
+  ];
+
+  for (let i = 0; i < MIN_CITY_PLACES; i++) {
+    const t = placeTemplates[i % placeTemplates.length];
+    const suffix = i >= placeTemplates.length ? ` (spot ${i + 1})` : "";
+    scenes.push({
+      order: i + 1,
+      text: `${t.name}${suffix} — one of the best stops in ${placeName}. Locals and travelers come here for the atmosphere, views, and stories behind every corner.`,
+      keywords: `${placeName} ${t.kw}`,
+      durationSec: clampSceneDuration(
+        config.sceneDurationMin + (i % 4),
+        targetDurationMin,
+      ),
+    });
+  }
+
+  scenes.push({
+    order: scenes.length,
+    text: `Save this ${placeName} guide before your trip — follow for more hidden gems!`,
+    keywords: `${placeName} travel outro sunset`,
+    durationSec: clampSceneDuration(5, targetDurationMin),
+  });
+
+  scenes.forEach((s, i) => {
+    s.order = i;
+  });
+
+  return scenes;
+}
+
 function buildDemoScript(
   topic: string,
   targetDurationMin: number,
 ): GeneratedScript {
+  const placeName = extractPlaceName(topic) || topic;
+  if (isPlaceTopic(topic)) {
+    const scenes = buildDemoPlaceScenes(placeName, targetDurationMin);
+    const hook = scenes[0].text;
+    return {
+      title: `${MIN_CITY_PLACES} Best Places in ${placeName}`,
+      script: scenes.map((s) => s.text).join("\n\n"),
+      hook,
+      scenes,
+    };
+  }
+
   const config = getVideoLengthConfig(targetDurationMin);
   const title = topic.trim().slice(0, 80) || "Untitled video";
   const hook = `Nobody talks about ${topic} like this…`;
@@ -110,46 +215,6 @@ function buildDemoScript(
     {
       text: `Food and culture around ${topic} deserve their own trip.`,
       keywords: `${topic} food market culture`,
-    },
-    {
-      text: `What most guides won't tell you about ${topic}.`,
-      keywords: `${topic} hidden gems`,
-    },
-    {
-      text: `Planning your visit? Here's the perfect ${topic} itinerary.`,
-      keywords: `${topic} travel planning map`,
-    },
-    {
-      text: `Budget-friendly ways to enjoy ${topic} without the crowds.`,
-      keywords: `${topic} budget travel`,
-    },
-    {
-      text: `The wildlife and nature around ${topic} will blow you away.`,
-      keywords: `${topic} nature landscape`,
-    },
-    {
-      text: `Season by season — when ${topic} looks its absolute best.`,
-      keywords: `${topic} seasons weather`,
-    },
-    {
-      text: `Photography lovers — these ${topic} angles are unmatched.`,
-      keywords: `${topic} photography scenic`,
-    },
-    {
-      text: `Safety and etiquette tips every ${topic} visitor should know.`,
-      keywords: `${topic} city street`,
-    },
-    {
-      text: `How ${topic} compares to other famous destinations worldwide.`,
-      keywords: `${topic} aerial cinematic`,
-    },
-    {
-      text: `Stories from travelers who fell in love with ${topic}.`,
-      keywords: `${topic} people happy travel`,
-    },
-    {
-      text: `The future of ${topic} — what's changing right now.`,
-      keywords: `${topic} modern skyline`,
     },
   ];
 
@@ -195,16 +260,19 @@ function buildDemoScript(
   return { title, script, hook, scenes };
 }
 
-async function generateWithOpenAI(
-  topic: string,
+async function expandPlaceScenesWithOpenAI(
+  placeName: string,
+  existing: GeneratedScript,
   targetDurationMin: number,
-): Promise<GeneratedScript> {
+  needed: number,
+): Promise<GeneratedScene[]> {
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    return buildDemoScript(topic, targetDurationMin);
-  }
+  if (!apiKey || needed <= 0) return existing.scenes;
 
-  const lengthRules = buildScriptPromptRules(targetDurationMin);
+  const existingPlaces = existing.scenes
+    .slice(1, -1)
+    .map((s) => s.text.slice(0, 120))
+    .join("\n");
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -218,7 +286,65 @@ async function generateWithOpenAI(
       messages: [
         {
           role: "system",
-          content: `You write engaging video scripts for YouTube and Instagram.
+          content: `Add MORE place scenes for a travel video. Return JSON: { "scenes": [{ "text", "keywords", "durationSec" }] }
+Each scene = ONE new real named place in ${placeName}. No repeats. keywords = 3-6 visual search terms.`,
+        },
+        {
+          role: "user",
+          content: `Destination: ${placeName}\nAlready covered:\n${existingPlaces}\n\nAdd exactly ${needed} NEW distinct named places.`,
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) return existing.scenes;
+
+  const data = (await response.json()) as {
+    choices: { message: { content: string } }[];
+  };
+  const parsed = JSON.parse(data.choices[0].message.content) as {
+    scenes: Record<string, unknown>[];
+  };
+
+  const extra = (parsed.scenes ?? []).map((s, i) =>
+    normalizeScene(s, existing.scenes.length + i, targetDurationMin),
+  );
+
+  const hook = existing.scenes[0];
+  const outro = existing.scenes[existing.scenes.length - 1];
+  const body = [...existing.scenes.slice(1, -1), ...extra];
+
+  return [hook, ...body, outro].map((s, i) => ({ ...s, order: i }));
+}
+
+async function generateWithOpenAI(
+  topic: string,
+  targetDurationMin: number,
+): Promise<GeneratedScript> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return buildDemoScript(topic, targetDurationMin);
+  }
+
+  const placeName = extractPlaceName(topic) || topic;
+  const placeMode = isPlaceTopic(topic);
+  const lengthRules = buildScriptPromptRules(topic, targetDurationMin);
+  const placeRules = placeMode ? buildPlaceScriptRules(placeName) : "";
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      response_format: { type: "json_object" },
+      max_tokens: placeMode ? 8000 : 4000,
+      messages: [
+        {
+          role: "system",
+          content: `You write engaging video scripts for YouTube and Instagram travel content.
 
 Return JSON:
 {
@@ -230,15 +356,19 @@ Return JSON:
 
 Rules:
 ${lengthRules}
+${placeRules}
 - Scene 0 MUST have isHook: true and use the hook text (shorter duration)
+- Final scene should be an outro CTA (save/follow/plan trip)
 - Write in first person when the creator appears in the video — energetic, enjoying the experience
-- keywords MUST be a single string of 3-6 concrete visual search terms tied to the TOPIC (e.g. "yosemite waterfall forest" NOT generic "nature")
-- keywords must match what is spoken in that scene
-- Avoid generic stock terms unless the topic requires them`,
+- keywords MUST be a single string of 3-6 concrete visual search terms tied to what is spoken
+- keywords must match the specific place or subject in that scene (NOT generic "city skyline" unless that is the scene)
+- Avoid generic filler — every body scene should teach the viewer something specific`,
         },
         {
           role: "user",
-          content: `Topic: ${topic}\nTarget video length: ${targetDurationMin} minute(s)\nThe creator's own photos will be composited into scenes — write as if they are personally there enjoying it.`,
+          content: placeMode
+            ? `Create a comprehensive "${placeName}" travel guide video.\nMinimum ${MIN_CITY_PLACES} named places required.\nTarget length: ${targetDurationMin} minute(s).\nThe creator's photos will be composited in — write as if they visited each spot.`
+            : `Topic: ${topic}\nTarget video length: ${targetDurationMin} minute(s)\nThe creator's own photos will be composited into scenes — write as if they are personally there enjoying it.`,
         },
       ],
     }),
@@ -256,16 +386,44 @@ ${lengthRules}
     string,
     unknown
   >;
-  return normalizeScript(parsed, topic, targetDurationMin);
+  let result = normalizeScript(parsed, topic, targetDurationMin);
+
+  if (placeMode) {
+    const placeCount = countPlaceBodyScenes(result.scenes);
+    if (placeCount < MIN_CITY_PLACES) {
+      const needed = MIN_CITY_PLACES - placeCount;
+      console.warn(
+        `[generate-script] Only ${placeCount} places for ${placeName}, expanding by ${needed}…`,
+      );
+      const expanded = await expandPlaceScenesWithOpenAI(
+        placeName,
+        result,
+        targetDurationMin,
+        needed,
+      );
+      result = {
+        ...result,
+        scenes: expanded,
+        script: expanded.map((s) => s.text).join("\n\n"),
+      };
+    }
+  }
+
+  return result;
 }
 
 export async function generateScript(
   topic: string,
   targetDurationMin = 1,
-): Promise<GeneratedScript> {
-  const minutes = normalizeTargetDurationMin(targetDurationMin);
+  assetCount = 0,
+): Promise<GeneratedScript & { effectiveDurationMin: number }> {
+  const effectiveDurationMin = getEffectiveDurationMin(topic, targetDurationMin);
+  let script: GeneratedScript;
   if (process.env.OPENAI_API_KEY) {
-    return generateWithOpenAI(topic, minutes);
+    script = await generateWithOpenAI(topic, effectiveDurationMin);
+  } else {
+    script = buildDemoScript(topic, effectiveDurationMin);
   }
-  return buildDemoScript(topic, minutes);
+  script.scenes = assignAssetOrders(script.scenes, assetCount);
+  return { ...script, effectiveDurationMin };
 }

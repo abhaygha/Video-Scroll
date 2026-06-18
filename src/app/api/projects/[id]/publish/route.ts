@@ -1,12 +1,30 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { db } from "@/lib/db";
-import { uploadToYouTube } from "@/lib/publish/youtube";
-import { uploadToInstagramReel } from "@/lib/publish/instagram";
+import { executePublish } from "@/lib/publish/scheduler";
+import { metadataFromProject } from "@/lib/ai/generate-metadata";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-export async function POST(_request: Request, context: RouteContext) {
+const bodySchema = z.object({
+  scheduledAt: z.string().datetime().optional(),
+  youtubeTitle: z.string().optional(),
+  youtubeDescription: z.string().optional(),
+  youtubeTags: z.string().optional(),
+  instagramCaption: z.string().optional(),
+});
+
+export async function POST(request: Request, context: RouteContext) {
   const { id } = await context.params;
+
+  let body: z.infer<typeof bodySchema> = {};
+  try {
+    const json = await request.json();
+    const parsed = bodySchema.safeParse(json);
+    if (parsed.success) body = parsed.data;
+  } catch {
+    // empty body ok
+  }
 
   const project = await db.project.findUnique({
     where: { id },
@@ -31,35 +49,59 @@ export async function POST(_request: Request, context: RouteContext) {
     );
   }
 
-  const youtube = await uploadToYouTube({
-    filePath: landscape.filePath,
-    title: project.title,
-    description: project.script ?? project.topic,
-  });
+  if (body.youtubeTitle || body.instagramCaption) {
+    await db.project.update({
+      where: { id },
+      data: {
+        youtubeTitle: body.youtubeTitle ?? project.youtubeTitle,
+        youtubeDescription:
+          body.youtubeDescription ?? project.youtubeDescription,
+        youtubeTags: body.youtubeTags ?? project.youtubeTags,
+        instagramCaption: body.instagramCaption ?? project.instagramCaption,
+      },
+    });
+  }
 
-  const instagram = await uploadToInstagramReel(
+  const updatedProject = await db.project.findUnique({ where: { id } });
+  const meta = metadataFromProject(updatedProject ?? project);
+
+  if (body.scheduledAt) {
+    const scheduledAt = new Date(body.scheduledAt);
+    await db.project.update({
+      where: { id },
+      data: { scheduledPublishAt: scheduledAt },
+    });
+
+    await db.publishJob.createMany({
+      data: [
+        {
+          projectId: id,
+          platform: "YOUTUBE",
+          status: "SCHEDULED",
+          scheduledAt,
+        },
+        {
+          projectId: id,
+          platform: "INSTAGRAM",
+          status: "SCHEDULED",
+          scheduledAt,
+        },
+      ],
+    });
+
+    return NextResponse.json({
+      scheduled: true,
+      scheduledAt: scheduledAt.toISOString(),
+      message: `Publish scheduled for ${scheduledAt.toLocaleString()}. Run the worker or call POST /api/publish/run-due to process.`,
+    });
+  }
+
+  const { youtube, instagram } = await executePublish(
+    id,
+    landscape.filePath,
     portrait.filePath,
-    `${project.title}\n\n${project.topic}`,
+    meta,
   );
 
-  await db.publishJob.createMany({
-    data: [
-      {
-        projectId: id,
-        platform: "YOUTUBE",
-        status: "PENDING",
-      },
-      {
-        projectId: id,
-        platform: "INSTAGRAM",
-        status: "PENDING",
-      },
-    ],
-  });
-
-  return NextResponse.json({
-    youtube,
-    instagram,
-    note: "Publish stubs — OAuth integration coming in Phase 2.",
-  });
+  return NextResponse.json({ youtube, instagram });
 }

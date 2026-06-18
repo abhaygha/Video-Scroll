@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/lib/db";
+import { getDefaultCompositingLayout } from "@/lib/creator/profile";
 import { normalizeTargetDurationMin } from "@/lib/video-length";
 
 const createSchema = z.object({
@@ -35,12 +36,14 @@ export async function POST(request: Request) {
     }
 
     const { topic, title, targetDurationMin } = parsed.data;
+    const compositingLayout = await getDefaultCompositingLayout();
 
     const project = await db.project.create({
       data: {
         topic,
         title: title ?? topic.slice(0, 80),
         targetDurationMin: normalizeTargetDurationMin(targetDurationMin),
+        compositingLayout,
         status: "DRAFT",
       },
       include: {

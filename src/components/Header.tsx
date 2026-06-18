@@ -9,6 +9,18 @@ export function Header() {
         </Link>
         <nav className="flex items-center gap-4 text-sm">
           <Link
+            href="/settings/creator"
+            className="text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+          >
+            Creator
+          </Link>
+          <Link
+            href="/settings/connections"
+            className="text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+          >
+            Connections
+          </Link>
+          <Link
             href="/dashboard"
             className="text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
           >

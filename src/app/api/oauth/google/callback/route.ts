@@ -1,0 +1,29 @@
+import { NextResponse } from "next/server";
+import { handleGoogleCallback } from "@/lib/publish/google-oauth";
+import { appUrl } from "@/lib/crypto";
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const code = searchParams.get("code");
+  const error = searchParams.get("error");
+
+  if (error) {
+    return NextResponse.redirect(
+      appUrl(`/settings/connections?error=${encodeURIComponent(error)}`),
+    );
+  }
+
+  if (!code) {
+    return NextResponse.redirect(appUrl("/settings/connections?error=no_code"));
+  }
+
+  try {
+    await handleGoogleCallback(code);
+    return NextResponse.redirect(appUrl("/settings/connections?connected=youtube"));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "OAuth failed";
+    return NextResponse.redirect(
+      appUrl(`/settings/connections?error=${encodeURIComponent(message)}`),
+    );
+  }
+}

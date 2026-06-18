@@ -37,6 +37,7 @@ enum PublishPlatform {
 enum PublishStatus {
   PENDING
   UPLOADING
+  SCHEDULED
   COMPLETED
   FAILED
 }
@@ -46,23 +47,39 @@ enum AssetType {
   VIDEO
 }
 
+enum CompositingLayout {
+  PIP_CORNER
+  PIP_LARGE
+  SPLIT_BOTTOM
+}
+
 model Project {
-  id              String        @id @default(cuid())
-  title           String
-  topic           String
-  status          ProjectStatus @default(DRAFT)
-  script          String?
-  hook            String?
-  targetDurationMin Int           @default(1)
-  renderProgress  Int           @default(0)
-  renderStep      String?
-  lastRenderError String?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-  scenes          Scene[]
-  renders         Render[]
-  publishes       PublishJob[]
-  assets          ProjectAsset[]
+  id                 String             @id @default(cuid())
+  title              String
+  topic              String
+  status             ProjectStatus      @default(DRAFT)
+  script             String?
+  hook               String?
+  targetDurationMin  Int                @default(1)
+  renderProgress     Int                @default(0)
+  renderStep         String?
+  lastRenderError    String?
+  thumbnailPath      String?
+  durationSec        Float?
+  scrollScoreJson    String?
+  youtubeTitle       String?
+  youtubeDescription String?
+  youtubeTags        String?
+  instagramCaption   String?
+  compositingLayout  CompositingLayout  @default(PIP_LARGE)
+  scheduledPublishAt DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  scenes             Scene[]
+  renders            Render[]
+  publishes          PublishJob[]
+  assets             ProjectAsset[]
+  shortClips         ShortClip[]
 }
 
 model Scene {
@@ -77,6 +94,8 @@ model Scene {
   clipUrl     String?
   error       String?
   durationSec Float   @default(5)
+  assetOrder  Int?
+  clipReady   Boolean @default(false)
 
   @@index([projectId])
 }
@@ -95,16 +114,30 @@ model Render {
   @@index([projectId])
 }
 
-model PublishJob {
-  id        String          @id @default(cuid())
+model ShortClip {
+  id        String  @id @default(cuid())
   projectId String
-  project   Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  platform  PublishPlatform
-  status    PublishStatus   @default(PENDING)
-  remoteId  String?
-  error     String?
-  createdAt DateTime        @default(now())
-  updatedAt DateTime        @updatedAt
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  order     Int
+  title     String?
+  filePath  String?
+  startSec  Float
+  endSec    Float
+
+  @@index([projectId])
+}
+
+model PublishJob {
+  id          String          @id @default(cuid())
+  projectId   String
+  project     Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  platform    PublishPlatform
+  status      PublishStatus   @default(PENDING)
+  remoteId    String?
+  error       String?
+  scheduledAt DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 
   @@index([projectId])
 }
@@ -121,4 +154,42 @@ model ProjectAsset {
   createdAt DateTime  @default(now())
 
   @@index([projectId])
+}
+
+model CreatorProfile {
+  id          String            @id @default("default")
+  displayName String?
+  voiceId     String            @default("onyx")
+  layout      CompositingLayout @default(PIP_LARGE)
+  brandColor  String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  assets      CreatorProfileAsset[]
+}
+
+model CreatorProfileAsset {
+  id        String         @id @default(cuid())
+  profileId String         @default("default")
+  profile   CreatorProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  type      AssetType
+  fileName  String
+  filePath  String
+  mimeType  String?
+  order     Int            @default(0)
+  createdAt DateTime       @default(now())
+
+  @@index([profileId])
+}
+
+model OAuthConnection {
+  id           String          @id @default(cuid())
+  platform     PublishPlatform @unique
+  accessToken  String
+  refreshToken String?
+  expiresAt    DateTime?
+  channelId    String?
+  channelName  String?
+  accountId    String?
+  accountName  String?
+  updatedAt    DateTime        @updatedAt
 }

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { renderProject } from "@/lib/media/render";
+import { enqueueRender } from "@/lib/queue/render-queue";
 import { db } from "@/lib/db";
 
 export const maxDuration = 900;
@@ -28,11 +29,21 @@ export async function GET(_request: Request, context: RouteContext) {
     include: {
       scenes: { orderBy: { order: "asc" } },
       renders: { orderBy: { createdAt: "desc" } },
+      shortClips: { orderBy: { order: "asc" } },
     },
   });
 
   if (!project) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  }
+
+  let scrollScore = null;
+  if (project.scrollScoreJson) {
+    try {
+      scrollScore = JSON.parse(project.scrollScoreJson);
+    } catch {
+      scrollScore = null;
+    }
   }
 
   return NextResponse.json({
@@ -41,6 +52,16 @@ export async function GET(_request: Request, context: RouteContext) {
     step: project.renderStep,
     error: project.lastRenderError,
     hook: project.hook,
+    durationSec: project.durationSec,
+    thumbnailPath: project.thumbnailPath,
+    scrollScore,
+    metadata: {
+      youtubeTitle: project.youtubeTitle,
+      youtubeDescription: project.youtubeDescription,
+      youtubeTags: project.youtubeTags,
+      instagramCaption: project.instagramCaption,
+    },
+    shortClips: project.shortClips,
     landscape: latestCompletedRender(project.renders, "LANDSCAPE_16_9"),
     portrait: latestCompletedRender(project.renders, "PORTRAIT_9_16"),
     lastFailure: latestFailedRender(project.renders, "LANDSCAPE_16_9"),
@@ -76,6 +97,25 @@ export async function POST(_request: Request, context: RouteContext) {
     );
   }
 
+  const mode = await enqueueRender(id);
+
+  if (mode === "queued") {
+    await db.project.update({
+      where: { id },
+      data: {
+        status: "RENDERING",
+        renderProgress: 0,
+        renderStep: "Queued — worker processing…",
+        lastRenderError: null,
+      },
+    });
+
+    return NextResponse.json(
+      { queued: true, message: "Render queued. You can close this tab." },
+      { status: 202 },
+    );
+  }
+
   try {
     const result = await renderProject(id);
 
@@ -84,6 +124,7 @@ export async function POST(_request: Request, context: RouteContext) {
       include: {
         scenes: { orderBy: { order: "asc" } },
         renders: { orderBy: { createdAt: "desc" } },
+        shortClips: { orderBy: { order: "asc" } },
       },
     });
 

@@ -8,6 +8,13 @@ type RouteContext = { params: Promise<{ id: string }> };
 const patchSchema = z.object({
   targetDurationMin: z.coerce.number().int().optional(),
   title: z.string().min(1).max(120).optional(),
+  compositingLayout: z
+    .enum(["PIP_CORNER", "PIP_LARGE", "SPLIT_BOTTOM"])
+    .optional(),
+  youtubeTitle: z.string().max(100).optional(),
+  youtubeDescription: z.string().max(5000).optional(),
+  youtubeTags: z.string().max(500).optional(),
+  instagramCaption: z.string().max(2200).optional(),
 });
 
 export async function GET(_request: Request, context: RouteContext) {
@@ -41,14 +48,27 @@ export async function PATCH(request: Request, context: RouteContext) {
     );
   }
 
-  const data: { targetDurationMin?: number; title?: string } = {};
+  const data: Record<string, unknown> = {};
   if (parsed.data.targetDurationMin !== undefined) {
     data.targetDurationMin = normalizeTargetDurationMin(
       parsed.data.targetDurationMin,
     );
   }
-  if (parsed.data.title !== undefined) {
-    data.title = parsed.data.title;
+  if (parsed.data.title !== undefined) data.title = parsed.data.title;
+  if (parsed.data.compositingLayout !== undefined) {
+    data.compositingLayout = parsed.data.compositingLayout;
+  }
+  if (parsed.data.youtubeTitle !== undefined) {
+    data.youtubeTitle = parsed.data.youtubeTitle;
+  }
+  if (parsed.data.youtubeDescription !== undefined) {
+    data.youtubeDescription = parsed.data.youtubeDescription;
+  }
+  if (parsed.data.youtubeTags !== undefined) {
+    data.youtubeTags = parsed.data.youtubeTags;
+  }
+  if (parsed.data.instagramCaption !== undefined) {
+    data.instagramCaption = parsed.data.instagramCaption;
   }
 
   const project = await db.project.update({

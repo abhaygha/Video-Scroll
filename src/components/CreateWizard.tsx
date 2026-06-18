@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import {
   VIDEO_LENGTH_OPTIONS,
   estimateRenderMinutes,
+  isPlaceTopic,
+  MIN_CITY_PLACES,
   type TargetDurationMin,
 } from "@/lib/video-length";
 import {
@@ -13,6 +15,9 @@ import {
   uploadPendingAssets,
   type AssetItem,
 } from "@/components/CreatorAttachments";
+import { LayoutPicker } from "@/components/LayoutPicker";
+import { ScrollScoreBadge } from "@/components/ScrollScoreBadge";
+import type { ScrollScore } from "@/lib/ai/scroll-score";
 import { parseJsonResponse } from "@/lib/api-client";
 
 type Step = "topic" | "script" | "render" | "publish";
@@ -34,9 +39,23 @@ type Project = {
   script: string | null;
   hook?: string | null;
   targetDurationMin?: number;
+  compositingLayout?: "PIP_CORNER" | "PIP_LARGE" | "SPLIT_BOTTOM";
+  youtubeTitle?: string | null;
+  youtubeDescription?: string | null;
+  youtubeTags?: string | null;
+  instagramCaption?: string | null;
+  durationSec?: number | null;
   scenes: Scene[];
   assets?: AssetItem[];
   renders: { format: string; status: string; filePath: string | null }[];
+};
+
+type ShortClip = {
+  id: string;
+  order: number;
+  title: string | null;
+  startSec: number;
+  endSec: number;
 };
 
 const steps: { id: Step; label: string }[] = [
@@ -59,6 +78,14 @@ export function CreateWizard() {
   const [renderStep, setRenderStep] = useState<string | null>(null);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [assets, setAssets] = useState<AssetItem[]>([]);
+  const [layout, setLayout] = useState<"PIP_CORNER" | "PIP_LARGE" | "SPLIT_BOTTOM">("PIP_LARGE");
+  const [scrollScore, setScrollScore] = useState<ScrollScore | null>(null);
+  const [shortClips, setShortClips] = useState<ShortClip[]>([]);
+  const [youtubeTitle, setYoutubeTitle] = useState("");
+  const [youtubeDescription, setYoutubeDescription] = useState("");
+  const [youtubeTags, setYoutubeTags] = useState("");
+  const [instagramCaption, setInstagramCaption] = useState("");
+  const [scheduleAt, setScheduleAt] = useState("");
 
   async function createProject() {
     setLoading(true);
@@ -125,8 +152,9 @@ export function CreateWizard() {
       const res = await fetch(`/api/projects/${project.id}/generate`, {
         method: "POST",
       });
-      const data = await parseJsonResponse<{ project: Project; error?: string }>(res);
+      const data = await parseJsonResponse<{ project: Project; error?: string; scrollScore?: ScrollScore }>(res);
       if (!res.ok) throw new Error(data.error ?? "Generation failed");
+      if (data.scrollScore) setScrollScore(data.scrollScore);
       setProject({
         ...data.project,
         scenes: data.project.scenes ?? [],
@@ -177,13 +205,26 @@ export function CreateWizard() {
       const res = await fetch(`/api/projects/${project.id}/render`, {
         method: "POST",
       });
-      const data = await parseJsonResponse<{ project: Project; error?: string }>(res);
+      const data = await parseJsonResponse<{
+        project?: Project;
+        error?: string;
+        queued?: boolean;
+        shortClips?: ShortClip[];
+      }>(res);
+
+      if (res.status === 202 || data.queued) {
+        setRenderStep("Queued — worker processing (you can keep this tab open)…");
+        await waitForRenderComplete(project.id);
+        return;
+      }
+
       if (!res.ok) throw new Error(data.error ?? "Render failed");
       setProject({
-        ...data.project,
-        scenes: data.project.scenes ?? [],
-        renders: data.project.renders ?? [],
+        ...data.project!,
+        scenes: data.project!.scenes ?? [],
+        renders: data.project!.renders ?? [],
       });
+      await loadPublishMeta(project.id);
       setRenderProgress(100);
       setRenderStep("Complete");
       setStep("publish");
@@ -196,23 +237,97 @@ export function CreateWizard() {
     }
   }
 
+  async function loadPublishMeta(projectId: string) {
+    const statusRes = await fetch(`/api/projects/${projectId}/render`);
+    if (!statusRes.ok) return;
+    const statusData = await statusRes.json();
+    if (statusData.scrollScore) setScrollScore(statusData.scrollScore);
+    if (statusData.shortClips) setShortClips(statusData.shortClips);
+    if (statusData.metadata) {
+      setYoutubeTitle(statusData.metadata.youtubeTitle ?? "");
+      setYoutubeDescription(statusData.metadata.youtubeDescription ?? "");
+      setYoutubeTags(statusData.metadata.youtubeTags ?? "");
+      setInstagramCaption(statusData.metadata.instagramCaption ?? "");
+    }
+  }
+
+  async function waitForRenderComplete(projectId: string) {
+    for (let i = 0; i < 600; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const statusRes = await fetch(`/api/projects/${projectId}/render`);
+      if (!statusRes.ok) continue;
+      const statusData = await statusRes.json();
+      setRenderProgress(statusData.progress ?? 0);
+      setRenderStep(statusData.step ?? null);
+      if (statusData.status === "RENDERED") {
+        const projRes = await fetch(`/api/projects/${projectId}`);
+        const projData = await projRes.json();
+        if (projData.project) {
+          setProject({
+            ...projData.project,
+            scenes: projData.project.scenes ?? [],
+            renders: projData.project.renders ?? [],
+          });
+        }
+        await loadPublishMeta(projectId);
+        setRenderProgress(100);
+        setRenderStep("Complete");
+        setStep("publish");
+        return;
+      }
+      if (statusData.status === "FAILED") {
+        throw new Error(statusData.error ?? "Render failed");
+      }
+    }
+    throw new Error("Render timed out. Check dashboard or worker logs.");
+  }
+
+  async function saveLayout(nextLayout: typeof layout) {
+    setLayout(nextLayout);
+    if (!project) return;
+    await fetch(`/api/projects/${project.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ compositingLayout: nextLayout }),
+    });
+    setProject((p) => (p ? { ...p, compositingLayout: nextLayout } : p));
+  }
+
   async function publishVideos() {
     if (!project) return;
     setLoading(true);
     setError(null);
     try {
+      const body: Record<string, string> = {
+        youtubeTitle,
+        youtubeDescription,
+        youtubeTags,
+        instagramCaption,
+      };
+      if (scheduleAt) {
+        body.scheduledAt = new Date(scheduleAt).toISOString();
+      }
+
       const res = await fetch(`/api/projects/${project.id}/publish`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       });
       const data = await parseJsonResponse<{
         error?: string;
-        youtube: { message: string };
-        instagram: { message: string };
+        scheduled?: boolean;
+        message?: string;
+        youtube?: { message: string };
+        instagram?: { message: string };
       }>(res);
       if (!res.ok) throw new Error(data.error ?? "Publish failed");
-      setPublishNote(
-        `${data.youtube.message}\n\n${data.instagram.message}`,
-      );
+      if (data.scheduled) {
+        setPublishNote(data.message ?? "Publish scheduled.");
+      } else {
+        setPublishNote(
+          `${data.youtube?.message ?? ""}\n\n${data.instagram?.message ?? ""}`,
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong");
     } finally {
@@ -310,6 +425,13 @@ export function CreateWizard() {
             <p className="mt-1 text-xs text-zinc-500">
               Longer videos use more scenes and take longer to render.
             </p>
+            {isPlaceTopic(topic) && (
+              <p className="mt-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-100">
+                City &amp; travel topics automatically generate at least{" "}
+                <strong>{MIN_CITY_PLACES} named places</strong> (uses Long ~5
+                min minimum for enough scenes).
+              </p>
+            )}
           </div>
           <button
             type="button"
@@ -340,6 +462,12 @@ export function CreateWizard() {
               setAssets(next);
               setProject((p) => (p ? { ...p, assets: next } : p));
             }}
+            disabled={loading}
+          />
+
+          <LayoutPicker
+            value={project.compositingLayout ?? layout}
+            onChange={saveLayout}
             disabled={loading}
           />
 
@@ -388,9 +516,13 @@ export function CreateWizard() {
                   <p className="mt-1 text-sm font-medium">{project.hook}</p>
                 </div>
               )}
+              {scrollScore && <ScrollScoreBadge score={scrollScore} />}
               <p className="text-sm text-zinc-600 dark:text-zinc-400">
                 {project.scenes.length} scenes · ~{Math.round(totalSceneSec)}s
-                planned · voiceover may extend each scene
+                planned
+                {isPlaceTopic(project.topic) &&
+                  ` · ${Math.max(0, project.scenes.length - 2)} places`}
+                {" "}· voiceover may extend each scene
               </p>
               <ul className="space-y-3">
                 {(project.scenes ?? []).map((scene) => (
@@ -469,8 +601,10 @@ export function CreateWizard() {
             stock clips, then merging with FFmpeg. Estimated render time:{" "}
             <strong>
               {estimateRenderMinutes(project.scenes?.length ?? 0)}
-            </strong>{" "}
-            — please keep this tab open.
+            </strong>
+            {process.env.NEXT_PUBLIC_REDIS_ENABLED !== "false" && (
+              <> — with Redis + worker running, you can close this tab.</>
+            )}
           </p>
           {loading && (
             <>
@@ -502,9 +636,69 @@ export function CreateWizard() {
           <div>
             <h1 className="text-2xl font-semibold">Ready to publish</h1>
             <p className="mt-2 text-zinc-600 dark:text-zinc-400">
-              Videos rendered to <code className="text-xs">output/</code>. Publish
-              stubs are wired for YouTube + Instagram.
+              Preview videos, edit metadata, and publish to YouTube + Instagram.
+              Connect accounts in{" "}
+              <Link href="/settings/connections" className="underline">
+                Settings → Connections
+              </Link>
+              .
             </p>
+          </div>
+
+          {scrollScore && <ScrollScoreBadge score={scrollScore} />}
+
+          {project.durationSec && (
+            <p className="text-sm text-zinc-500">
+              Duration: {Math.round(project.durationSec)}s
+            </p>
+          )}
+
+          <img
+            src={`/api/projects/${project.id}/thumbnail`}
+            alt="Video thumbnail"
+            className="w-full rounded-xl border border-zinc-200 dark:border-zinc-800"
+            onError={(e) => {
+              (e.target as HTMLImageElement).style.display = "none";
+            }}
+          />
+
+          <div className="space-y-3 rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+            <p className="text-sm font-medium">Publish metadata</p>
+            <input
+              value={youtubeTitle}
+              onChange={(e) => setYoutubeTitle(e.target.value)}
+              placeholder="YouTube title"
+              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            />
+            <textarea
+              value={youtubeDescription}
+              onChange={(e) => setYoutubeDescription(e.target.value)}
+              rows={3}
+              placeholder="YouTube description"
+              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            />
+            <input
+              value={youtubeTags}
+              onChange={(e) => setYoutubeTags(e.target.value)}
+              placeholder="Tags (comma-separated)"
+              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            />
+            <textarea
+              value={instagramCaption}
+              onChange={(e) => setInstagramCaption(e.target.value)}
+              rows={3}
+              placeholder="Instagram caption + hashtags"
+              className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            />
+            <div>
+              <label className="text-xs text-zinc-500">Schedule publish (optional)</label>
+              <input
+                type="datetime-local"
+                value={scheduleAt}
+                onChange={(e) => setScheduleAt(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              />
+            </div>
           </div>
 
           <ul className="space-y-4 text-sm">
@@ -571,6 +765,33 @@ export function CreateWizard() {
             })}
           </ul>
 
+          {shortClips.length > 0 && (
+            <div>
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
+                Shorts clip pack
+              </h2>
+              <ul className="mt-3 space-y-3">
+                {shortClips.map((clip) => (
+                  <li
+                    key={clip.id}
+                    className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-800"
+                  >
+                    <p className="text-xs text-zinc-500">
+                      Clip {clip.order + 1} · {Math.round(clip.endSec - clip.startSec)}s
+                    </p>
+                    <p className="text-sm">{clip.title}</p>
+                    <video
+                      controls
+                      playsInline
+                      className="mt-2 w-full max-w-xs rounded-lg bg-black"
+                      src={`/api/projects/${project.id}/shorts/${clip.id}`}
+                    />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {publishNote ? (
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm whitespace-pre-wrap dark:border-emerald-900 dark:bg-emerald-950">
               {publishNote}
@@ -582,7 +803,7 @@ export function CreateWizard() {
               onClick={publishVideos}
               className="rounded-full bg-zinc-900 px-6 py-2.5 text-sm font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
             >
-              {loading ? "Publishing…" : "Publish to YouTube + Instagram"}
+              {loading ? "Publishing…" : scheduleAt ? "Schedule publish" : "Publish to YouTube + Instagram"}
             </button>
           )}
 

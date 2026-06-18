@@ -84,6 +84,12 @@ export function ProjectActions({
         throw new Error(data.error ?? "Render failed");
       }
 
+      if (res.status === 202 || data.queued) {
+        setStatus("RENDERING");
+        setStep("Queued — processing in background…");
+        return;
+      }
+
       setStatus(data.project?.status ?? "RENDERED");
       setProgress(100);
       setStep("Complete");

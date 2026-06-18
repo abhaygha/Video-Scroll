@@ -4,6 +4,7 @@ export type GeneratedScene = {
   keywords: string;
   durationSec: number;
   isHook?: boolean;
+  assetOrder?: number | null;
 };
 
 export type GeneratedScript = {

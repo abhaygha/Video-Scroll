@@ -3,6 +3,10 @@ import { promisify } from "node:util";
 import { access, copyFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { buildKineticCaptionFilters } from "@/lib/media/captions";
+import {
+  buildCreatorOverlayFilter,
+  type LayoutKey,
+} from "@/lib/media/compositing";
 
 const execFileAsync = promisify(execFile);
 
@@ -16,6 +20,8 @@ const SYSTEM_FONT_CANDIDATES = [
 const PROJECT_FONT_REL = "assets/fonts/arial.ttf";
 
 const OUTPUT_FPS = "30";
+const SCENE_PRESET = "ultrafast";
+const FINAL_PRESET = "fast";
 
 export async function checkFfmpeg(): Promise<boolean> {
   try {
@@ -72,7 +78,7 @@ export async function cropToPortrait(
     "-c:v",
     "libx264",
     "-preset",
-    "fast",
+    FINAL_PRESET,
     "-movflags",
     "+faststart",
   ];
@@ -202,7 +208,7 @@ export async function prepareSceneClip(
     "-c:v",
     "libx264",
     "-preset",
-    "fast",
+    SCENE_PRESET,
     "-c:a",
     "aac",
     "-ar",
@@ -293,6 +299,7 @@ export async function overlayCreatorMedia(
   creatorType: "IMAGE" | "VIDEO",
   outputPath: string,
   durationSec: number,
+  layout: LayoutKey = "PIP_LARGE",
 ): Promise<void> {
   const dur = String(durationSec);
   const hasAudio = await hasAudioStream(inputPath);
@@ -302,12 +309,7 @@ export async function overlayCreatorMedia(
       ? ["-loop", "1", "-t", dur, "-i", creatorPath]
       : ["-i", creatorPath];
 
-  const videoFilter =
-    `[1:v]scale=540:-2:force_original_aspect_ratio=decrease,` +
-    `pad=540:720:(ow-iw)/2:(oh-ih)/2:color=white,` +
-    `fps=${OUTPUT_FPS},setpts=PTS-STARTPTS,` +
-    `trim=duration=${dur}[creator];` +
-    `[0:v][creator]overlay=main_w-overlay_w-56:main_h-overlay_h-64:shortest=1[vout]`;
+  const videoFilter = buildCreatorOverlayFilter(layout, durationSec);
 
   const args = ["-y", "-i", inputPath, ...creatorInput, "-filter_complex", videoFilter, "-map", "[vout]"];
 
@@ -321,7 +323,7 @@ export async function overlayCreatorMedia(
     "-c:v",
     "libx264",
     "-preset",
-    "fast",
+    SCENE_PRESET,
     "-t",
     dur,
     "-movflags",
@@ -360,7 +362,7 @@ export async function concatVideos(
     "-c:v",
     "libx264",
     "-preset",
-    "fast",
+    SCENE_PRESET,
     "-c:a",
     "aac",
     "-ar",

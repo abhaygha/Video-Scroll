@@ -1,3 +1,11 @@
+import {
+  isPlaceTopic,
+  extractPlaceName,
+  minDurationForPlaceTopic,
+  placeScriptSceneCount,
+  MIN_CITY_PLACES,
+} from "@/lib/topic-intent";
+
 export const VIDEO_LENGTH_OPTIONS = [
   {
     minutes: 1,
@@ -20,7 +28,7 @@ export const VIDEO_LENGTH_OPTIONS = [
   {
     minutes: 5,
     label: "Long (~5 min)",
-    hint: "Deep-dive explainer",
+    hint: "Deep-dive explainer · city guides",
     sceneMin: 14,
     sceneMax: 20,
     sceneDurationMin: 8,
@@ -29,7 +37,7 @@ export const VIDEO_LENGTH_OPTIONS = [
   {
     minutes: 10,
     label: "Extended (~10 min)",
-    hint: "Full guide / documentary",
+    hint: "Full guide / 20+ places",
     sceneMin: 20,
     sceneMax: 30,
     sceneDurationMin: 10,
@@ -55,10 +63,34 @@ export function getVideoLengthConfig(minutes: number) {
   );
 }
 
-export function buildScriptPromptRules(minutes: number): string {
+/** City/place topics auto-use at least 5 min so 20 places fit. */
+export function getEffectiveDurationMin(
+  topic: string,
+  requestedMin: number,
+): TargetDurationMin {
+  const normalized = normalizeTargetDurationMin(requestedMin);
+  if (isPlaceTopic(topic)) {
+    return Math.max(normalized, minDurationForPlaceTopic()) as TargetDurationMin;
+  }
+  return normalized;
+}
+
+export function getEffectiveSceneBounds(
+  topic: string,
+  minutes: number,
+): { sceneMin: number; sceneMax: number } {
+  if (isPlaceTopic(topic)) {
+    return placeScriptSceneCount();
+  }
   const c = getVideoLengthConfig(minutes);
+  return { sceneMin: c.sceneMin, sceneMax: c.sceneMax };
+}
+
+export function buildScriptPromptRules(topic: string, minutes: number): string {
+  const c = getVideoLengthConfig(minutes);
+  const bounds = getEffectiveSceneBounds(topic, minutes);
   const targetSec = minutes * 60;
-  return `- ${c.sceneMin}-${c.sceneMax} scenes, target ~${minutes} minute(s) (${targetSec - 30}-${targetSec + 45} seconds total)
+  return `- ${bounds.sceneMin}-${bounds.sceneMax} scenes, target ~${minutes} minute(s) (${targetSec - 30}-${targetSec + 90} seconds total)
 - Each scene durationSec: ${c.sceneDurationMin}-${c.sceneDurationMax} seconds
 - For longer videos: write richer narration per scene (2-4 sentences where needed), not just more one-line scenes
 - Total durationSec across all scenes should add up to roughly ${targetSec} seconds`;
@@ -73,7 +105,9 @@ export function clampSceneDuration(
 }
 
 export function estimateRenderMinutes(sceneCount: number): string {
-  const low = Math.max(2, Math.round(sceneCount * 0.8));
-  const high = Math.max(5, Math.round(sceneCount * 1.5));
+  const low = Math.max(2, Math.ceil(sceneCount / 4) + 1);
+  const high = Math.max(3, Math.ceil(sceneCount / 2) + 2);
   return `${low}–${high} minutes`;
 }
+
+export { MIN_CITY_PLACES, isPlaceTopic, extractPlaceName };

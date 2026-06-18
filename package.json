@@ -12,12 +12,16 @@
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
     "docker:up": "docker compose up -d",
-    "docker:down": "docker compose down"
+    "docker:down": "docker compose down",
+    "worker": "tsx src/worker/render-worker.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
+    "bullmq": "^5.66.4",
     "dotenv": "^17.4.2",
+    "googleapis": "^170.1.0",
+    "ioredis": "^5.9.2",
     "next": "16.2.9",
     "pg": "^8.21.0",
     "react": "19.2.4",
@@ -34,6 +38,7 @@
     "eslint-config-next": "16.2.9",
     "prisma": "^7.8.0",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }
