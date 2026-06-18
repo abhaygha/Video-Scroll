@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { PrismaPg } from "@prisma/adapter-pg";
 import pg from "pg";
 import { PrismaClient } from "@/generated/prisma/client";
@@ -5,7 +8,18 @@ import { PrismaClient } from "@/generated/prisma/client";
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
   pgPool: pg.Pool | undefined;
+  prismaSchemaHash: string | undefined;
 };
+
+function getSchemaHash(): string {
+  try {
+    const schemaPath = path.join(process.cwd(), "prisma", "schema.prisma");
+    const schema = readFileSync(schemaPath, "utf8");
+    return createHash("md5").update(schema).digest("hex");
+  } catch {
+    return "unknown";
+  }
+}
 
 function createPrismaClient() {
   const pool =
@@ -20,8 +34,30 @@ function createPrismaClient() {
   return new PrismaClient({ adapter });
 }
 
-export const db = globalForPrisma.prisma ?? createPrismaClient();
+function getPrismaClient(): PrismaClient {
+  const schemaHash = getSchemaHash();
+  const stale =
+    !globalForPrisma.prisma ||
+    globalForPrisma.prismaSchemaHash !== schemaHash;
 
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = db;
+  if (stale) {
+    if (globalForPrisma.prisma) {
+      void globalForPrisma.prisma.$disconnect();
+    }
+    globalForPrisma.prisma = createPrismaClient();
+    globalForPrisma.prismaSchemaHash = schemaHash;
+  }
+
+  return globalForPrisma.prisma!;
 }
+
+export const db = new Proxy({} as PrismaClient, {
+  get(_target, prop: string | symbol) {
+    const client = getPrismaClient();
+    const value = client[prop as keyof PrismaClient];
+    if (typeof value === "function") {
+      return (value as (...args: unknown[]) => unknown).bind(client);
+    }
+    return value;
+  },
+});

@@ -64,21 +64,31 @@ export default async function DashboardPage() {
         ) : (
           <ul className="grid gap-4 sm:grid-cols-2">
             {projects.map((project) => (
-              <li
-                key={project.id}
-                className="rounded-xl border border-zinc-200 p-5 dark:border-zinc-800"
-              >
-                <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-                  {project.status}
-                </p>
-                <h2 className="mt-1 font-semibold">{project.title}</h2>
-                <p className="mt-2 line-clamp-2 text-sm text-zinc-600 dark:text-zinc-400">
-                  {project.topic}
-                </p>
+              <li key={project.id}>
+                <Link
+                  href={`/projects/${project.id}`}
+                  className="block rounded-xl border border-zinc-200 p-5 transition hover:border-zinc-400 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:border-zinc-600 dark:hover:bg-zinc-900"
+                >
+                  <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
+                    {project.status}
+                  </p>
+                  <h2 className="mt-1 font-semibold">{project.title}</h2>
+                  <p className="mt-2 line-clamp-2 text-sm text-zinc-600 dark:text-zinc-400">
+                    {project.topic}
+                  </p>
                 <p className="mt-3 text-xs text-zinc-500">
                   {project._count.scenes} scenes ·{" "}
-                  {new Date(project.createdAt).toLocaleDateString()}
+                  {new Date(project.createdAt).toLocaleDateString()} ·{" "}
+                  <span className="text-blue-600 underline dark:text-blue-400">
+                    Open videos
+                  </span>
+                  {project.status === "FAILED" && project.lastRenderError && (
+                    <span className="mt-1 block truncate text-red-600 dark:text-red-400">
+                      {project.lastRenderError}
+                    </span>
+                  )}
                 </p>
+                </Link>
               </li>
             ))}
           </ul>

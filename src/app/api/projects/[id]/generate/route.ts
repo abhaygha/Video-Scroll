@@ -18,7 +18,10 @@ export async function POST(_request: Request, context: RouteContext) {
   });
 
   try {
-    const generated = await generateScript(project.topic);
+    const generated = await generateScript(
+      project.topic,
+      project.targetDurationMin,
+    );
 
     await db.scene.deleteMany({ where: { projectId: id } });
 
@@ -27,13 +30,18 @@ export async function POST(_request: Request, context: RouteContext) {
       data: {
         title: generated.title,
         script: generated.script,
+        hook: generated.hook,
         status: "READY",
+        lastRenderError: null,
+        renderProgress: 0,
+        renderStep: null,
         scenes: {
-          create: generated.scenes.map((scene) => ({
+          create: generated.scenes.map((scene, index) => ({
             order: scene.order,
             text: scene.text,
             keywords: normalizeKeywords(scene.keywords),
             durationSec: scene.durationSec,
+            isHook: scene.isHook ?? index === 0,
           })),
         },
       },

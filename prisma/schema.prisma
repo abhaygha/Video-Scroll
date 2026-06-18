@@ -41,17 +41,28 @@ enum PublishStatus {
   FAILED
 }
 
+enum AssetType {
+  IMAGE
+  VIDEO
+}
+
 model Project {
-  id        String        @id @default(cuid())
-  title     String
-  topic     String
-  status    ProjectStatus @default(DRAFT)
-  script    String?
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
-  scenes    Scene[]
-  renders   Render[]
-  publishes PublishJob[]
+  id              String        @id @default(cuid())
+  title           String
+  topic           String
+  status          ProjectStatus @default(DRAFT)
+  script          String?
+  hook            String?
+  targetDurationMin Int           @default(1)
+  renderProgress  Int           @default(0)
+  renderStep      String?
+  lastRenderError String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  scenes          Scene[]
+  renders         Render[]
+  publishes       PublishJob[]
+  assets          ProjectAsset[]
 }
 
 model Scene {
@@ -61,8 +72,10 @@ model Scene {
   order       Int
   text        String
   keywords    String
+  isHook      Boolean @default(false)
   voiceUrl    String?
   clipUrl     String?
+  error       String?
   durationSec Float   @default(5)
 
   @@index([projectId])
@@ -92,6 +105,20 @@ model PublishJob {
   error     String?
   createdAt DateTime        @default(now())
   updatedAt DateTime        @updatedAt
+
+  @@index([projectId])
+}
+
+model ProjectAsset {
+  id        String    @id @default(cuid())
+  projectId String
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  type      AssetType
+  fileName  String
+  filePath  String
+  mimeType  String?
+  order     Int       @default(0)
+  createdAt DateTime  @default(now())
 
   @@index([projectId])
 }

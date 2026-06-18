@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { access, copyFile, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { buildKineticCaptionFilters } from "@/lib/media/captions";
 
 const execFileAsync = promisify(execFile);
 
@@ -23,6 +24,19 @@ export async function checkFfmpeg(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export async function getMediaDuration(inputPath: string): Promise<number> {
+  const { stdout } = await execFileAsync("ffprobe", [
+    "-v",
+    "error",
+    "-show_entries",
+    "format=duration",
+    "-of",
+    "default=noprint_wrappers=1:nokey=1",
+    inputPath,
+  ]);
+  return parseFloat(stdout.trim()) || 0;
 }
 
 async function hasAudioStream(inputPath: string): Promise<boolean> {
@@ -48,7 +62,8 @@ export async function cropToPortrait(
   inputPath: string,
   outputPath: string,
 ): Promise<void> {
-  await execFileAsync("ffmpeg", [
+  const hasAudio = await hasAudioStream(inputPath);
+  const args = [
     "-y",
     "-i",
     inputPath,
@@ -58,24 +73,28 @@ export async function cropToPortrait(
     "libx264",
     "-preset",
     "fast",
-    "-c:a",
-    "aac",
-    "-ar",
-    "44100",
-    "-ac",
-    "2",
     "-movflags",
     "+faststart",
-    outputPath,
-  ]);
+  ];
+
+  if (hasAudio) {
+    args.push("-c:a", "aac", "-ar", "44100", "-ac", "2");
+  } else {
+    args.push("-an");
+  }
+
+  args.push(outputPath);
+  await execFileAsync("ffmpeg", args);
 }
 
 function escapeDrawtext(text: string): string {
   return text
     .slice(0, 40)
     .replace(/\\/g, "\\\\")
+    .replace(/,/g, "\\,")
     .replace(/:/g, "\\:")
-    .replace(/'/g, "\\'");
+    .replace(/'/g, "\\'")
+    .replace(/%/g, "\\%");
 }
 
 async function ensureProjectFont(): Promise<string | null> {
@@ -157,22 +176,25 @@ export async function createPlaceholderVideo(
   }
 }
 
-/** Normalize every scene to 1080p30 + stereo AAC (clip audio or silence). */
+/** Normalize every scene to 1080p30 + stereo AAC with optional AI voiceover. */
 export async function prepareSceneClip(
   inputPath: string,
   outputPath: string,
   durationSec: number,
   caption: string,
+  voicePath?: string | null,
+  options?: { isHook?: boolean },
 ): Promise<void> {
   const fontFile = await ensureProjectFont();
-  const text = escapeDrawtext(caption);
+  const isHook = options?.isHook ?? false;
   const captionPart = fontFile
-    ? `,drawtext=fontfile=${fontFile}:text='${text}':fontsize=34:fontcolor=white:borderw=2:bordercolor=black@0.5:x=(w-text_w)/2:y=h-th-60`
+    ? `,${buildKineticCaptionFilters(caption, durationSec, fontFile, isHook)}`
     : "";
 
   const dur = String(durationSec);
   const vf = `scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=${OUTPUT_FPS}${captionPart}`;
-  const hasAudio = await hasAudioStream(inputPath);
+  const hasStockAudio = await hasAudioStream(inputPath);
+  const hasVoice = Boolean(voicePath);
 
   const commonTail = [
     "-t",
@@ -194,7 +216,46 @@ export async function prepareSceneClip(
     outputPath,
   ];
 
-  if (hasAudio) {
+  if (hasVoice && voicePath) {
+    if (hasStockAudio) {
+      await execFileAsync("ffmpeg", [
+        "-y",
+        "-i",
+        inputPath,
+        "-i",
+        voicePath,
+        "-vf",
+        vf,
+        "-filter_complex",
+        `[0:a]aresample=44100,aformat=channel_layouts=stereo,volume=0.1[bed];[1:a]aresample=44100,aformat=channel_layouts=stereo,volume=1.0[voice];[bed][voice]amix=inputs=2:duration=longest:dropout_transition=0,apad=pad_dur=${dur},atrim=0:${dur}[aout]`,
+        "-map",
+        "0:v:0",
+        "-map",
+        "[aout]",
+        ...commonTail,
+      ]);
+    } else {
+      await execFileAsync("ffmpeg", [
+        "-y",
+        "-i",
+        inputPath,
+        "-i",
+        voicePath,
+        "-vf",
+        vf,
+        "-filter_complex",
+        `[1:a]aresample=44100,aformat=channel_layouts=stereo,volume=1.0,apad=pad_dur=${dur},atrim=0:${dur}[aout]`,
+        "-map",
+        "0:v:0",
+        "-map",
+        "[aout]",
+        ...commonTail,
+      ]);
+    }
+    return;
+  }
+
+  if (hasStockAudio) {
     await execFileAsync("ffmpeg", [
       "-y",
       "-i",
@@ -224,6 +285,51 @@ export async function prepareSceneClip(
       ...commonTail,
     ]);
   }
+}
+
+export async function overlayCreatorMedia(
+  inputPath: string,
+  creatorPath: string,
+  creatorType: "IMAGE" | "VIDEO",
+  outputPath: string,
+  durationSec: number,
+): Promise<void> {
+  const dur = String(durationSec);
+  const hasAudio = await hasAudioStream(inputPath);
+
+  const creatorInput =
+    creatorType === "IMAGE"
+      ? ["-loop", "1", "-t", dur, "-i", creatorPath]
+      : ["-i", creatorPath];
+
+  const videoFilter =
+    `[1:v]scale=540:-2:force_original_aspect_ratio=decrease,` +
+    `pad=540:720:(ow-iw)/2:(oh-ih)/2:color=white,` +
+    `fps=${OUTPUT_FPS},setpts=PTS-STARTPTS,` +
+    `trim=duration=${dur}[creator];` +
+    `[0:v][creator]overlay=main_w-overlay_w-56:main_h-overlay_h-64:shortest=1[vout]`;
+
+  const args = ["-y", "-i", inputPath, ...creatorInput, "-filter_complex", videoFilter, "-map", "[vout]"];
+
+  if (hasAudio) {
+    args.push("-map", "0:a:0", "-c:a", "copy");
+  } else {
+    args.push("-f", "lavfi", "-i", `anullsrc=r=44100:cl=stereo:d=${dur}`, "-map", "2:a:0", "-c:a", "aac");
+  }
+
+  args.push(
+    "-c:v",
+    "libx264",
+    "-preset",
+    "fast",
+    "-t",
+    dur,
+    "-movflags",
+    "+faststart",
+    outputPath,
+  );
+
+  await execFileAsync("ffmpeg", args);
 }
 
 function toConcatPath(filePath: string): string {
@@ -265,6 +371,70 @@ export async function concatVideos(
     OUTPUT_FPS,
     "-fps_mode",
     "cfr",
+    "-movflags",
+    "+faststart",
+    outputPath,
+  ]);
+}
+
+export async function mixBackgroundMusic(
+  inputPath: string,
+  musicPath: string,
+  outputPath: string,
+  musicVolume = 0.2,
+): Promise<void> {
+  const duration = await getMediaDuration(inputPath);
+  const dur = String(duration || 30);
+  const hasVoice = await hasAudioStream(inputPath);
+
+  if (!hasVoice) {
+    await execFileAsync("ffmpeg", [
+      "-y",
+      "-i",
+      inputPath,
+      "-i",
+      musicPath,
+      "-filter_complex",
+      `[1:a]aresample=44100,aformat=channel_layouts=stereo,volume=${musicVolume},atrim=0:${dur},apad=pad_dur=${dur}[music]`,
+      "-map",
+      "0:v:0",
+      "-map",
+      "[music]",
+      "-c:v",
+      "copy",
+      "-c:a",
+      "aac",
+      "-ar",
+      "44100",
+      "-ac",
+      "2",
+      "-movflags",
+      "+faststart",
+      outputPath,
+    ]);
+    return;
+  }
+
+  await execFileAsync("ffmpeg", [
+    "-y",
+    "-i",
+    inputPath,
+    "-i",
+    musicPath,
+    "-filter_complex",
+    `[0:a]aresample=44100,aformat=channel_layouts=stereo,volume=1.0[voice];[1:a]aresample=44100,aformat=channel_layouts=stereo,volume=${musicVolume},atrim=0:${dur},apad=pad_dur=${dur}[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[aout]`,
+    "-map",
+    "0:v:0",
+    "-map",
+    "[aout]",
+    "-c:v",
+    "copy",
+    "-c:a",
+    "aac",
+    "-ar",
+    "44100",
+    "-ac",
+    "2",
     "-movflags",
     "+faststart",
     outputPath,
@@ -334,7 +504,8 @@ export async function normalizeVideoAudio(
 }
 
 export function getOutputDir(): string {
-  return process.env.OUTPUT_DIR ?? path.join(process.cwd(), "output");
+  const raw = process.env.OUTPUT_DIR ?? path.join(process.cwd(), "output");
+  return path.resolve(raw);
 }
 
 export async function fileExists(filePath: string): Promise<boolean> {
