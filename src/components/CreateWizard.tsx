@@ -17,6 +17,7 @@ import {
 } from "@/components/CreatorAttachments";
 import { LayoutPicker } from "@/components/LayoutPicker";
 import { ScrollScoreBadge } from "@/components/ScrollScoreBadge";
+import { SceneEditor } from "@/components/SceneEditor";
 import type { ScrollScore } from "@/lib/ai/scroll-score";
 import { parseJsonResponse } from "@/lib/api-client";
 
@@ -524,25 +525,15 @@ export function CreateWizard() {
                   ` · ${Math.max(0, project.scenes.length - 2)} places`}
                 {" "}· voiceover may extend each scene
               </p>
-              <ul className="space-y-3">
-                {(project.scenes ?? []).map((scene) => (
-                  <li
-                    key={scene.id}
-                    className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
-                  >
-                    <p className="text-xs font-medium uppercase text-zinc-500">
-                      {scene.isHook ? (
-                        <span className="mr-2 rounded bg-amber-100 px-1.5 py-0.5 text-amber-900 dark:bg-amber-900 dark:text-amber-100">
-                          Hook
-                        </span>
-                      ) : null}
-                      Scene {scene.order + 1} · {scene.durationSec}s ·{" "}
-                      {scene.keywords}
-                    </p>
-                    <p className="mt-2 text-sm">{scene.text}</p>
-                  </li>
-                ))}
-              </ul>
+              <SceneEditor
+                projectId={project.id}
+                topic={project.topic}
+                scenes={project.scenes ?? []}
+                onScenesChange={(next) =>
+                  setProject((p) => (p ? { ...p, scenes: next } : p))
+                }
+                disabled={loading}
+              />
               <div className="flex flex-wrap items-end gap-3">
                 <div className="min-w-[200px] flex-1">
                   <label

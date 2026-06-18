@@ -1,3 +1,5 @@
+import { extractPlaceName } from "@/lib/topic-intent";
+
 type PexelsVideoFile = {
   link: string;
   width: number;
@@ -26,7 +28,45 @@ type PixabayVideoResponse = {
 export type StockResult = {
   url: string;
   source: "pexels" | "pixabay";
+  query?: string;
 };
+
+const GENERIC_TERMS = new Set([
+  "cinematic",
+  "b-roll",
+  "broll",
+  "travel",
+  "landmark",
+  "aerial",
+  "city",
+  "nature",
+  "sunset",
+  "skyline",
+  "street",
+  "culture",
+  "historic",
+  "architecture",
+  "scenic",
+  "tourism",
+  "tourist",
+  "attractions",
+  "golden",
+  "hour",
+  "daily",
+  "life",
+  "local",
+  "authentic",
+  "hidden",
+  "gems",
+  "food",
+  "market",
+  "outro",
+  "video",
+  "guide",
+  "places",
+  "best",
+  "top",
+]);
 
 function pickBestPexelsFile(files: PexelsVideoFile[]): string | null {
   const mp4s = files.filter(
@@ -50,27 +90,96 @@ function uniqueQueries(...parts: (string | undefined)[]): string[] {
   const out: string[] = [];
   for (const part of parts) {
     const q = part?.trim();
-    if (!q || seen.has(q.toLowerCase())) continue;
+    if (!q || q.length < 2 || seen.has(q.toLowerCase())) continue;
     seen.add(q.toLowerCase());
     out.push(q);
   }
   return out;
 }
 
-/** Build fallback search queries — topic nouns first, then simplified keywords. */
-export function buildStockQueries(sceneKeywords: string, topic: string): string[] {
-  const keywords = sceneKeywords.trim();
-  const topicWords = topic.trim().split(/\s+/).filter(Boolean);
-  const shortKeywords = keywords.split(/\s+/).slice(0, 4).join(" ");
-  const shortTopic = topicWords.slice(0, 4).join(" ");
+/** Pull a named landmark from narration, e.g. "The Alamo — historic..." → "The Alamo". */
+export function extractNamedPlaceFromScene(sceneText: string): string | null {
+  const trimmed = sceneText.trim();
+  if (!trimmed) return null;
 
-  return uniqueQueries(
+  const beforeDash = trimmed.split(/\s*[—–-]\s+/)[0]?.trim();
+  if (beforeDash && beforeDash.length >= 3 && beforeDash.length <= 90) {
+    return beforeDash;
+  }
+
+  const beforeComma = trimmed.split(",")[0]?.trim();
+  if (
+    beforeComma &&
+    beforeComma.length >= 3 &&
+    beforeComma.length <= 90 &&
+    beforeComma.split(/\s+/).length <= 12
+  ) {
+    return beforeComma;
+  }
+
+  const words = trimmed.split(/\s+/).slice(0, 8).join(" ");
+  return words.length >= 3 ? words : null;
+}
+
+function specificKeywordTokens(keywords: string): string[] {
+  return keywords
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !GENERIC_TERMS.has(w));
+}
+
+/** Score how well a query matches scene context (higher = more specific). */
+function scoreQuery(query: string, sceneText: string, topic: string): number {
+  const q = query.toLowerCase();
+  let score = 0;
+  const named = extractNamedPlaceFromScene(sceneText);
+  if (named && q.includes(named.toLowerCase().slice(0, 12))) score += 10;
+
+  for (const token of specificKeywordTokens(topic)) {
+    if (q.includes(token)) score += 3;
+  }
+  for (const token of specificKeywordTokens(sceneText)) {
+    if (q.includes(token)) score += 2;
+  }
+
+  const genericCount = [...GENERIC_TERMS].filter((t) => q.includes(t)).length;
+  score -= genericCount;
+
+  return score;
+}
+
+/** Build prioritized search queries — specific place names first, generic last. */
+export function buildStockQueries(
+  sceneKeywords: string,
+  topic: string,
+  sceneText?: string,
+): string[] {
+  const keywords = sceneKeywords.trim();
+  const topicPlace = extractPlaceName(topic);
+  const namedPlace = sceneText ? extractNamedPlaceFromScene(sceneText) : null;
+
+  const keywordTokens = specificKeywordTokens(keywords);
+  const specificKw = keywordTokens.slice(0, 5).join(" ");
+  const shortKeywords = keywords.split(/\s+/).slice(0, 6).join(" ");
+
+  const queries = uniqueQueries(
+    namedPlace && topicPlace ? `${namedPlace} ${topicPlace}` : undefined,
+    namedPlace && specificKw ? `${namedPlace} ${specificKw}` : undefined,
+    namedPlace ?? undefined,
     keywords,
+    specificKw || undefined,
     shortKeywords,
+    topicPlace && specificKw ? `${specificKw} ${topicPlace}` : undefined,
+    topicPlace && keywords ? `${keywords} ${topicPlace}` : undefined,
+    topicPlace || undefined,
     topic.trim(),
-    shortTopic,
-    topicWords.length >= 2 ? `${topicWords[0]} ${topicWords[1]}` : undefined,
-    "cinematic b-roll",
+    topicPlace ? `${topicPlace} landmark travel` : undefined,
+    "cinematic travel b-roll",
+  );
+
+  return queries.sort(
+    (a, b) =>
+      scoreQuery(b, sceneText ?? "", topic) - scoreQuery(a, sceneText ?? "", topic),
   );
 }
 
@@ -93,7 +202,7 @@ async function searchPexelsCandidates(query: string): Promise<StockResult[]> {
       const link = pickBestPexelsFile(video.video_files ?? []);
       if (link && !seen.has(link)) {
         seen.add(link);
-        results.push({ url: link, source: "pexels" });
+        results.push({ url: link, source: "pexels", query });
       }
     }
   } catch {
@@ -121,7 +230,7 @@ async function searchPixabayCandidates(query: string): Promise<StockResult[]> {
       const link = pickBestPixabayUrl(hit.videos);
       if (link && !seen.has(link)) {
         seen.add(link);
-        results.push({ url: link, source: "pixabay" });
+        results.push({ url: link, source: "pixabay", query });
       }
     }
   } catch {
@@ -131,13 +240,55 @@ async function searchPixabayCandidates(query: string): Promise<StockResult[]> {
   return results;
 }
 
+async function collectCandidates(
+  query: string,
+  limit = 12,
+): Promise<StockResult[]> {
+  const pexels = await searchPexelsCandidates(query);
+  const pixabay = await searchPixabayCandidates(query);
+  return [...pexels, ...pixabay].slice(0, limit);
+}
+
+/** Preview top stock matches for a scene (editor UI). */
+export async function previewStockForScene(input: {
+  sceneKeywords: string;
+  topic: string;
+  sceneText?: string;
+  limit?: number;
+}): Promise<{ query: string; results: StockResult[] }[]> {
+  const queries = buildStockQueries(
+    input.sceneKeywords,
+    input.topic,
+    input.sceneText,
+  ).slice(0, 4);
+
+  const previews: { query: string; results: StockResult[] }[] = [];
+  const seen = new Set<string>();
+
+  for (const query of queries) {
+    const hits = await collectCandidates(query, 3);
+    const unique = hits.filter((h) => {
+      if (seen.has(h.url)) return false;
+      seen.add(h.url);
+      return true;
+    });
+    if (unique.length > 0) {
+      previews.push({ query, results: unique });
+    }
+    if (seen.size >= (input.limit ?? 6)) break;
+  }
+
+  return previews;
+}
+
 /** Try multiple queries and skip clips already used in this render. */
 export async function searchStockVideoWithFallback(
   sceneKeywords: string,
   topic: string,
   usedUrls: Set<string>,
+  sceneText?: string,
 ): Promise<StockResult> {
-  const queries = buildStockQueries(sceneKeywords, topic);
+  const queries = buildStockQueries(sceneKeywords, topic, sceneText);
 
   for (const query of queries) {
     const pexels = await searchPexelsCandidates(query);
@@ -152,7 +303,7 @@ export async function searchStockVideoWithFallback(
   }
 
   throw new Error(
-    `No stock video for scene (keywords: "${sceneKeywords}"). Tried: ${queries.join(" → ")}`,
+    `No stock video for scene (keywords: "${sceneKeywords}"). Tried: ${queries.slice(0, 6).join(" → ")}`,
   );
 }
 
@@ -168,4 +319,20 @@ export async function searchStockVideoUrl(
 
 export function hasStockApiKeys(): boolean {
   return Boolean(process.env.PEXELS_API_KEY || process.env.PIXABAY_API_KEY);
+}
+
+export function suggestKeywordsFromScene(
+  sceneText: string,
+  topic: string,
+): string {
+  const named = extractNamedPlaceFromScene(sceneText);
+  const place = extractPlaceName(topic);
+  const tokens = specificKeywordTokens(sceneText).slice(0, 4);
+
+  return uniqueQueries(
+    named && place ? `${named} ${place}` : undefined,
+    named && tokens.length ? `${named} ${tokens.join(" ")}` : undefined,
+    tokens.length ? `${tokens.join(" ")} ${place}` : undefined,
+    place,
+  )[0] ?? sceneText.split(/\s+/).slice(0, 5).join(" ");
 }

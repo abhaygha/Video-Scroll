@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { Header } from "@/components/Header";
 import { ProjectActions } from "@/components/ProjectActions";
+import { ProjectSceneEditor } from "@/components/ProjectSceneEditor";
 
 export const dynamic = "force-dynamic";
 
@@ -142,26 +143,22 @@ export default async function ProjectPage({ params }: PageProps) {
         {project.scenes.length > 0 && (
           <section className="mt-10">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
-              Scenes
+              Edit scenes
             </h2>
-            <ol className="mt-3 space-y-2">
-              {project.scenes.map((scene) => (
-                <li
-                  key={scene.id}
-                  className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800"
-                >
-                  {scene.isHook && (
-                    <span className="mr-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-900 dark:bg-amber-900 dark:text-amber-100">
-                      Hook
-                    </span>
-                  )}
-                  {scene.text}
-                  <p className="mt-1 text-xs text-zinc-500">
-                    Stock: {scene.keywords}
-                  </p>
-                </li>
-              ))}
-            </ol>
+            <div className="mt-3">
+              <ProjectSceneEditor
+                projectId={project.id}
+                topic={project.topic}
+                initialScenes={project.scenes.map((s) => ({
+                  id: s.id,
+                  order: s.order,
+                  text: s.text,
+                  keywords: s.keywords,
+                  durationSec: s.durationSec,
+                  isHook: s.isHook,
+                }))}
+              />
+            </div>
           </section>
         )}
       </main>

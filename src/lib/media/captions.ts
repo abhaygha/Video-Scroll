@@ -4,7 +4,7 @@ export type CaptionPhrase = {
   end: number;
 };
 
-/** Split narration into timed phrases for kinetic on-screen captions. */
+/** Split narration into timed phrases synced to voiceover length. */
 export function buildCaptionPhrases(
   text: string,
   durationSec: number,
@@ -19,12 +19,20 @@ export function buildCaptionPhrases(
     chunks.push(words.slice(i, i + chunkSize).join(" "));
   }
 
-  const slice = durationSec / chunks.length;
-  return chunks.map((chunk, index) => ({
-    text: chunk,
-    start: index * slice,
-    end: (index + 1) * slice,
-  }));
+  const totalWords = words.length;
+  let cursor = 0;
+
+  return chunks.map((chunk) => {
+    const chunkWords = chunk.split(/\s+/).filter(Boolean).length;
+    const chunkDur = (chunkWords / totalWords) * durationSec;
+    const start = cursor;
+    cursor += chunkDur;
+    return {
+      text: chunk,
+      start,
+      end: cursor,
+    };
+  });
 }
 
 function escapeDrawtext(text: string): string {

@@ -189,12 +189,17 @@ export async function prepareSceneClip(
   durationSec: number,
   caption: string,
   voicePath?: string | null,
-  options?: { isHook?: boolean },
+  options?: { isHook?: boolean; captionDurationSec?: number },
 ): Promise<void> {
   const fontFile = await ensureProjectFont();
   const isHook = options?.isHook ?? false;
+  // Sync captions to actual voice length — not the padded scene duration.
+  const captionDurationSec =
+    options?.captionDurationSec && options.captionDurationSec > 0
+      ? options.captionDurationSec
+      : durationSec;
   const captionPart = fontFile
-    ? `,${buildKineticCaptionFilters(caption, durationSec, fontFile, isHook)}`
+    ? `,${buildKineticCaptionFilters(caption, captionDurationSec, fontFile, isHook)}`
     : "";
 
   const dur = String(durationSec);

@@ -167,6 +167,7 @@ export async function renderProject(projectId: string): Promise<RenderResult> {
             scene.keywords || project.topic,
             project.topic,
             usedStockUrls,
+            scene.text,
           );
           usedStockUrls.add(stock.url);
           stockByScene.set(scene.id, stock.url);
@@ -242,7 +243,10 @@ export async function renderProject(projectId: string): Promise<RenderResult> {
             clipDuration,
             scene.text,
             voicePath,
-            { isHook: scene.isHook },
+            {
+              isHook: scene.isHook,
+              captionDurationSec: voiceDuration,
+            },
           );
 
           if (creatorAsset) {
