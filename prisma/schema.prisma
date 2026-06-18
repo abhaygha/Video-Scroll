@@ -1,0 +1,97 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum ProjectStatus {
+  DRAFT
+  GENERATING
+  READY
+  RENDERING
+  RENDERED
+  PUBLISHED
+  FAILED
+}
+
+enum RenderFormat {
+  LANDSCAPE_16_9
+  PORTRAIT_9_16
+}
+
+enum RenderStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum PublishPlatform {
+  YOUTUBE
+  INSTAGRAM
+}
+
+enum PublishStatus {
+  PENDING
+  UPLOADING
+  COMPLETED
+  FAILED
+}
+
+model Project {
+  id        String        @id @default(cuid())
+  title     String
+  topic     String
+  status    ProjectStatus @default(DRAFT)
+  script    String?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  scenes    Scene[]
+  renders   Render[]
+  publishes PublishJob[]
+}
+
+model Scene {
+  id          String  @id @default(cuid())
+  projectId   String
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  order       Int
+  text        String
+  keywords    String
+  voiceUrl    String?
+  clipUrl     String?
+  durationSec Float   @default(5)
+
+  @@index([projectId])
+}
+
+model Render {
+  id        String       @id @default(cuid())
+  projectId String
+  project   Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  format    RenderFormat
+  filePath  String?
+  status    RenderStatus @default(PENDING)
+  error     String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@index([projectId])
+}
+
+model PublishJob {
+  id        String          @id @default(cuid())
+  projectId String
+  project   Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  platform  PublishPlatform
+  status    PublishStatus   @default(PENDING)
+  remoteId  String?
+  error     String?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  @@index([projectId])
+}
